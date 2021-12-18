@@ -1,0 +1,317 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © letsgoforitanik
+
+//@version=4
+strategy("Hull + FLI + QQE MOD", overlay=true, pyramiding=1, default_qty_type = strategy.cash, default_qty_value = 500, calc_on_order_fills=false, slippage=0,commission_type=strategy.commission.percent,commission_value=0.04)
+
+
+strat_dir_input = input(title="Strategy Direction", defval="all", options=["long", "short", "all"], group="Main Settings")
+strat_dir_value = strat_dir_input == "long" ? strategy.direction.long : strat_dir_input == "short" ? strategy.direction.short : strategy.direction.all
+strategy.risk.allow_entry_in(strat_dir_value)
+
+
+// Dates ==================================================================================================================
+
+testStartYear = input(2016, "Backtest Start Year", group="Main Settings")
+testStartMonth = input(1, "Backtest Start Month", group="Main Settings")
+testStartDay = input(1, "Backtest Start Day", group="Main Settings")
+testStartHour = input(0, "Backtest Start Hour", group="Main Settings")
+testStartMinute = input(0, "Backtest Start Minute", group="Main Settings")
+testPeriodStart = timestamp(testStartYear, testStartMonth, testStartDay, testStartHour, testStartMinute)
+testStopYear = input(2030, "Backtest Stop Year", group="Main Settings")
+testStopMonth = input(12, "Backtest Stop Month", group="Main Settings")
+testStopDay = input(30, "Backtest Stop Day", group="Main Settings")
+testPeriodStop = timestamp(testStopYear, testStopMonth, testStopDay, 0, 0)
+
+
+testPeriod() => time >= testPeriodStart and time <= testPeriodStop ? true : false
+
+
+// Hull Suite =================================================================================================
+
+src = input(close, title="Source", group="Hull Suite Settings")
+length = input(55, title="Length", group="Hull Suite Settings")
+lengthMult = input(1.0, title="Length multiplier", group="Hull Suite Settings")
+
+useHtf = input(false, title="Change Timeframe?", group="Hull Suite Settings")
+htf = input("240", title="Higher timeframe", type=input.resolution, group="Hull Suite Settings")
+
+switchColor = true 
+candleCol = false 
+visualSwitch  = true 
+thicknesSwitch = 1 
+transpSwitch = 40 
+
+
+
+HMA(_src, _length) =>  wma(2 * wma(_src, _length / 2) - wma(_src, _length), round(sqrt(_length)))
+Mode(src, len) => HMA(src, len)
+
+
+_hull = Mode(src, int(length * lengthMult))
+HULL = useHtf ? security(syminfo.ticker, htf, _hull) : _hull
+MHULL = HULL[0]
+SHULL = HULL[2]
+
+
+hullColor = switchColor ? (HULL > HULL[2] ? #00ff00 : #ff0000) : #ff9800
+
+
+Fi1 = plot(MHULL, title="MHULL", color=hullColor, linewidth=thicknesSwitch, transp=50)
+Fi2 = plot(visualSwitch ? SHULL : na, title="SHULL", color=hullColor, linewidth=thicknesSwitch, transp=50)
+fill(Fi1, Fi2, title="Band Filler", color=hullColor, transp=transpSwitch)
+
+
+var bool hullLongCondition = na
+var bool hullShortCondition = na
+
+
+if crossover(MHULL, SHULL)
+    hullLongCondition := true
+    hullShortCondition := false
+    
+if crossover(SHULL, MHULL)
+    hullLongCondition := false
+    hullShortCondition := true
+
+
+// FLI =========================================================================================================
+
+
+BBperiod = input(defval=21, title="BB Period", type=input.integer, minval = 1, group="Follow Line Settings")
+BBdeviations = input(defval=1.00, title="BB Deviations", type=input.float, minval=0.1, step=0.05, group="Follow Line Settings")
+UseATRfilter = input(defval=true, title="ATR Filter", type=input.bool, group="Follow Line Settings")
+ATRperiod = input(defval = 5,     title = "ATR Period", type=input.integer, minval = 1, group="Follow Line Settings")
+hl = input(defval=false, title="Hide Labels",  type=input.bool, group="Follow Line Settings")
+
+//
+BBUpper=sma (close,BBperiod)+stdev(close, BBperiod)*BBdeviations
+BBLower=sma (close,BBperiod)-stdev(close, BBperiod)*BBdeviations
+//
+TrendLine = 0.0
+iTrend = 0.0
+buy = 0.0
+sell = 0.0
+//
+BBSignal = close>BBUpper? 1 : close<BBLower? -1 : 0
+// 
+if BBSignal == 1 and UseATRfilter == 1
+    TrendLine:=low-atr(ATRperiod)
+    if TrendLine<TrendLine[1] 
+        TrendLine:=TrendLine[1]
+if BBSignal == -1 and UseATRfilter == 1
+    TrendLine:=high+atr(ATRperiod)
+    if TrendLine>TrendLine[1]
+        TrendLine:=TrendLine[1]
+if BBSignal == 0 and UseATRfilter == 1
+    TrendLine:=TrendLine[1]
+//
+if BBSignal == 1 and UseATRfilter == 0
+    TrendLine:=low
+    if TrendLine<TrendLine[1] 
+        TrendLine:=TrendLine[1]
+if BBSignal == -1 and UseATRfilter == 0
+    TrendLine:=high
+    if TrendLine>TrendLine[1]
+        TrendLine:=TrendLine[1]
+if BBSignal == 0 and UseATRfilter == 0
+    TrendLine:=TrendLine[1]
+//
+iTrend:=iTrend[1]
+if TrendLine>TrendLine[1] 
+    iTrend:=1
+if TrendLine<TrendLine[1] 
+    iTrend:=-1
+
+
+buy:=iTrend[1]==-1 and iTrend==1 ? 1 : na
+sell:=iTrend[1]==1 and iTrend==-1? 1 : na
+
+
+plot(TrendLine, color=iTrend > 0?color.blue:color.red ,style=plot.style_line,linewidth=2,transp=0,title="Trend Line") 
+plotshape(buy == 1 and hl == false? TrendLine-atr(8) :na, text='buy', style= shape.labelup, location=location.absolute, color=color.blue, textcolor=color.white, offset=0, transp=0,size=size.auto)
+plotshape(sell == 1 and hl == false ?TrendLine+atr(8):na, text='sell', style=shape.labeldown, location=location.absolute, color=color.red, textcolor=color.white, offset=0, transp=0,size=size.auto)
+
+
+
+var bool fliLongCondition = na
+var bool fliShortCondition = na
+
+if buy == 1
+    fliLongCondition := true
+    fliShortCondition := false
+    
+if sell == 1
+    fliLongCondition := false
+    fliShortCondition := true
+
+
+// QQE MOD ===========================================================================================================
+
+RSI_Period = input(6, title='RSI Length', group="QQE Settings")
+SF = input(5, title='RSI Smoothing', group="QQE Settings")
+QQE = input(3, title='Fast QQE Factor', group="QQE Settings")
+ThreshHold = input(3, title="Thresh-hold", group="QQE Settings")
+
+srce = input(close, title="RSI Source")
+
+Wilders_Period = RSI_Period * 2 - 1
+
+
+Rsi = rsi(srce, RSI_Period)
+RsiMa = ema(Rsi, SF)
+AtrRsi = abs(RsiMa[1] - RsiMa)
+MaAtrRsi = ema(AtrRsi, Wilders_Period)
+dar = ema(MaAtrRsi, Wilders_Period) * QQE
+
+longband = 0.0
+shortband = 0.0
+trend = 0
+
+DeltaFastAtrRsi = dar
+RSIndex = RsiMa
+newshortband = RSIndex + DeltaFastAtrRsi
+newlongband = RSIndex - DeltaFastAtrRsi
+longband := RSIndex[1] > longband[1] and RSIndex > longband[1] ? max(longband[1], newlongband) : newlongband
+shortband := RSIndex[1] < shortband[1] and RSIndex < shortband[1] ? min(shortband[1], newshortband) : newshortband
+cross_1 = cross(longband[1], RSIndex)
+trend := cross(RSIndex, shortband[1]) ? 1 : cross_1 ? -1 : nz(trend[1], 1)
+FastAtrRsiTL = trend == 1 ? longband : shortband
+
+
+
+lengthQ = input(50, minval=1, title="Bollinger Length")
+mult = input(0.35, minval=0.001, maxval=5, step=0.1, title="BB Multiplier")
+basis = sma(FastAtrRsiTL - 50, length)
+dev = mult * stdev(FastAtrRsiTL - 50, lengthQ)
+upper = basis + dev
+lower = basis - dev
+color_bar = RsiMa - 50 > upper ? #00c3ff : RsiMa - 50 < lower ? #ff0062 : color.gray
+
+
+QQEzlong = 0
+QQEzlong := nz(QQEzlong[1])
+QQEzshort = 0
+QQEzshort := nz(QQEzshort[1])
+QQEzlong := RSIndex >= 50 ? QQEzlong + 1 : 0
+QQEzshort := RSIndex < 50 ? QQEzshort + 1 : 0
+
+
+//Zero = hline(0, color=color.white, linestyle=hline.style_dotted, linewidth=1)
+
+
+RSI_Period2 = input(6, title='RSI Length', group="QQE Settings")
+SF2 = input(5, title='RSI Smoothing', group="QQE Settings")
+QQE2 = input(1.61, title='Fast QQE2 Factor', group="QQE Settings")
+ThreshHold2 = input(3, title="Thresh-hold", group="QQE Settings")
+
+src2 = input(close, title="RSI Source", group="QQE Settings")
+
+Wilders_Period2 = RSI_Period2 * 2 - 1
+
+
+Rsi2 = rsi(src2, RSI_Period2)
+RsiMa2 = ema(Rsi2, SF2)
+AtrRsi2 = abs(RsiMa2[1] - RsiMa2)
+MaAtrRsi2 = ema(AtrRsi2, Wilders_Period2)
+dar2 = ema(MaAtrRsi2, Wilders_Period2) * QQE2
+longband2 = 0.0
+shortband2 = 0.0
+trend2 = 0
+
+DeltaFastAtrRsi2 = dar2
+RSIndex2 = RsiMa2
+newshortband2 = RSIndex2 + DeltaFastAtrRsi2
+newlongband2 = RSIndex2 - DeltaFastAtrRsi2
+longband2 := RSIndex2[1] > longband2[1] and RSIndex2 > longband2[1] ? max(longband2[1], newlongband2) : newlongband2
+shortband2 := RSIndex2[1] < shortband2[1] and RSIndex2 < shortband2[1] ? min(shortband2[1], newshortband2) : newshortband2
+cross_2 = cross(longband2[1], RSIndex2)
+trend2 := cross(RSIndex2, shortband2[1]) ? 1 : cross_2 ? -1 : nz(trend2[1], 1)
+FastAtrRsi2TL = trend2 == 1 ? longband2 : shortband2
+
+QQE2zlong = 0
+QQE2zlong := nz(QQE2zlong[1])
+QQE2zshort = 0
+QQE2zshort := nz(QQE2zshort[1])
+QQE2zlong := RSIndex2 >= 50 ? QQE2zlong + 1 : 0
+QQE2zshort := RSIndex2 < 50 ? QQE2zshort + 1 : 0
+
+
+hcolor2 = RsiMa2 - 50 > ThreshHold2 ? color.silver : RsiMa2 - 50 < 0 - ThreshHold2 ? color.silver : na
+
+Greenbar1 = RsiMa2 - 50 > ThreshHold2
+Greenbar2 = RsiMa - 50 > upper
+
+Redbar1 = RsiMa2 - 50 < 0 - ThreshHold2
+Redbar2 = RsiMa - 50 < lower
+
+
+qqeLongCondition = Greenbar1 and Greenbar2 == 1
+qqeShortCondition = Redbar1 and Redbar2 == 1
+
+
+// ADX Settings =====================================================================================
+
+adxLevel = input(25, title="ADX Length", group="ADX Settings")
+[diplus, diminus, adx] = dmi(14, 14)
+
+adxCondition = adx >= adxLevel
+
+
+// PNL Settings =====================================================================================
+
+activation = input(1.0, title="Activation (%)", group="PNL Settings", step=0.1)
+callback = input(1.0, title="Callback (%)", group="PNL Settings", step=0.1)
+loss = input(1.0, title="Stop (%)", group="PNL Settings", step=0.1)
+
+trailActivation = close * (activation * 0.01) / syminfo.mintick
+trailOffset = close * (callback * 0.01) / syminfo.mintick
+stop = close * (loss * 0.01) / syminfo.mintick
+
+
+// strategy =====================================================================================================================
+
+
+
+alert_message =''
+
+
+//if fliLongCondition and adxCondition and testPeriod()
+if hullLongCondition and fliLongCondition and qqeLongCondition and adxCondition and testPeriod() 
+
+    if strategy.position_size < 0
+        // close short bot and open long bot
+        alert_message := "[{\"action\":\"close_at_market_price\",\"message_type\":\"bot\",\"bot_id\":7284327,\"email_token\":\"331c8ed8-a6bf-4730-bbad-f4f579c0c06d\",\"delay_seconds\":0,\"pair\":\"USDT_GALAUSDT\"},{\"message_type\":\"bot\",\"bot_id\":7279290,\"email_token\":\"306730f0-57f3-4f17-b1ee-2ec10c6ed852\",\"delay_seconds\":3,\"pair\":\"USDT_GALAUSDT\"}]"                        
+    else
+        // open long bot
+        alert_message := "{\"message_type\":\"bot\",\"bot_id\":7279290,\"email_token\":\"306730f0-57f3-4f17-b1ee-2ec10c6ed852\",\"delay_seconds\":0,\"pair\":\"USDT_GALAUSDT\"}"
+
+    strategy.entry("buy", strategy.long, comment=alert_message)
+    
+    alert_message := "{\"action\":\"close_at_market_price\",\"message_type\":\"bot\",\"bot_id\":7279290,\"email_token\":\"306730f0-57f3-4f17-b1ee-2ec10c6ed852\",\"delay_seconds\":0,\"pair\":\"USDT_GALAUSDT\"}"
+    strategy.exit("exit-long", "buy", trail_offset=trailOffset, trail_points=trailActivation, loss=stop, comment=alert_message)
+    
+    
+    
+    
+//if fliShortCondition and adxCondition and testPeriod()
+if hullShortCondition and fliShortCondition and qqeShortCondition and adxCondition and testPeriod()
+    
+    
+    if strategy.position_size > 0
+        // close long bot and open short bot
+        alert_message := "[{\"action\":\"close_at_market_price\",\"message_type\":\"bot\",\"bot_id\":7279290,\"email_token\":\"306730f0-57f3-4f17-b1ee-2ec10c6ed852\",\"delay_seconds\":0,\"pair\":\"USDT_GALAUSDT\"},{\"message_type\":\"bot\",\"bot_id\":7284327,\"email_token\":\"331c8ed8-a6bf-4730-bbad-f4f579c0c06d\",\"delay_seconds\":3,\"pair\":\"USDT_GALAUSDT\"}]"
+    else 
+        // open short bot
+        alert_message := "{\"message_type\":\"bot\",\"bot_id\":7284327,\"email_token\":\"331c8ed8-a6bf-4730-bbad-f4f579c0c06d\",\"delay_seconds\":0,\"pair\":\"USDT_GALAUSDT\"}"
+
+    strategy.entry("sell", strategy.short, comment=alert_message)
+    
+    alert_message := "{\"action\":\"close_at_market_price\",\"message_type\":\"bot\",\"bot_id\":7284327,\"email_token\":\"331c8ed8-a6bf-4730-bbad-f4f579c0c06d\",\"delay_seconds\":0,\"pair\":\"USDT_GALAUSDT\"}"
+    strategy.exit("exit-short", "sell", trail_offset=trailOffset, trail_points=trailActivation, loss=stop, comment=alert_message)
+
+
+
+
+
+
